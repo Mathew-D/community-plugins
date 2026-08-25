@@ -1,0 +1,138 @@
+id              = "mdusome/nix-flake-update"
+name            = "Nix Flake Update"
+version         = "1.0.0"
+plugin_api      = 3
+icon            = "nix"
+author          = "mdusome"
+description     = "Read-only update checker for flake-based NixOS configurations. Detects updates across all flake inputs without modifying flake.lock."
+tags            = [ "nixos", "nix", "flakes", "utility" ]
+dependencies    = [ "git", "python3" ]
+license         = "MIT"
+
+[[widget]]
+id      = "nix-flake-update"
+entry   = "widget.luau"
+
+[[widget.setting]]
+key         = "show_text"
+type        = "bool"
+label_key   = "setting.widget.show_text.label"
+default     = true
+
+[[widget.setting]]
+key         = "show_glyph"
+type        = "bool"
+label_key   = "setting.widget.show_glyph.label"
+default     = true
+
+[[widget.setting]]
+key         = "colorize_text"
+type        = "bool"
+label_key   = "setting.widget.colorize_text.label"
+default     = false
+
+[[widget.setting]]
+key         = "colorize_glyph"
+type        = "bool"
+label_key   = "setting.widget.colorize_glyph.label"
+default     = true
+
+[[widget.setting]]
+key         = "up_to_date_glyph"
+type        = "glyph"
+label_key   = "setting.widget.up_to_date_glyph.label"
+default     = "rosette-discount-check"
+
+[[widget.setting]]
+key         = "up_to_date_color"
+type        = "color"
+label_key   = "setting.widget.up_to_date_color.label"
+default     = "#57ff57"
+
+[[widget.setting]]
+key         = "update_available_glyph"
+type        = "glyph"
+label_key   = "setting.widget.update_available_glyph.label"
+default     = "cloud-download"
+
+[[widget.setting]]
+key         = "update_available_color"
+type        = "color"
+label_key   = "setting.widget.update_available_color.label"
+default     = "#ff5757"
+
+[[widget.setting]]
+key         = "checking_glyph"
+type        = "glyph"
+label_key   = "setting.widget.checking_glyph.label"
+default     = "loader-3"
+
+[[widget.setting]]
+key         = "checking_color"
+type        = "color"
+label_key   = "setting.widget.checking_color.label"
+default     = "#ffeb57"
+
+[[widget.setting]]
+key         = "unknown_glyph"
+type        = "glyph"
+label_key   = "setting.widget.unknown_glyph.label"
+default     = "cloud-question"
+
+[[widget.setting]]
+key         = "unknown_color"
+type        = "color"
+label_key   = "setting.widget.unknown_color.label"
+default     = "on_surface"
+
+[[setting]]
+key             = "flake_path"
+type            = "string"
+label_key       = "setting.flake_path.label"
+description_key = "setting.flake_path.description"
+default         = ""
+
+[[setting]]
+key             = "update_check_interval"
+type            = "int"
+label_key       = "setting.update_check_interval.label"
+description_key = "setting.update_check_interval.description"
+default         = 60
+min             = 5
+
+[[setting]]
+key             = "update_check_timeout"
+type            = "int"
+label_key       = "setting.update_check_timeout.label"
+description_key = "setting.update_check_timeout.description"
+default         = 5
+min             = 1
+max             = 30
+
+[[setting]]
+key             = "panel_card_color"
+type            = "color"
+label_key       = "setting.panel_card_color.label"
+default         = "surface_variant"
+
+[[setting]]
+key             = "panel_card_opacity"
+type            = "int"
+label_key       = "setting.panel_card_opacity.label"
+default         = 70
+min             = 0
+max             = 100
+
+[[setting]]
+key             = "show_check_notification"
+type            = "bool"
+label_key       = "setting.show_check_notification.label"
+description_key = "setting.show_check_notification.description"
+default         = false
+
+[[setting]]
+key             = "show_update_notification"
+type            = "bool"
+label_key       = "setting.show_update_notification.label"
+description_key = "setting.show_update_notification.description"
+default         = true

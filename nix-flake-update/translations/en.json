@@ -1,0 +1,97 @@
+{
+  "bar": {
+    "checking": "Checking...",
+    "unknown": "Unknown",
+    "up_to_date": "Up to date",
+    "updates": "updates"
+  },
+  "error": {
+    "check_timed_out": "Update check timed out",
+    "flake_path_not_found": "Configured flake path not found",
+    "no_flake_detected": "No flake.lock detected. Set flake_path in settings."
+  },
+  "notification": {
+    "check_complete": "Nix flake update check complete",
+    "checking": "Checking flake inputs for updates...",
+    "updates_available": "flake input(s) have updates available"
+  },
+  "panel": {
+    "all_up_to_date": "All inputs are up to date",
+    "cancel": "Cancel",
+    "check": "Check now",
+    "checking": "Checking for updates...",
+    "error": "Error",
+    "inputs_have_updates": "input(s) have updates",
+    "last_checked": "Last checked",
+    "never": "never",
+    "no_data": "No data yet — click Check now",
+    "no_flake": "No flake found. Configure flake_path in settings.",
+    "title": "Nix Flake Update"
+  },
+  "setting": {
+    "flake_path": {
+      "description": "Absolute path to your flake directory (contains flake.nix and flake.lock). Leave blank to auto-detect from common locations (~/.config/nixos, ~/nixos, ~/.dotfiles, /etc/nixos).",
+      "label": "Flake path"
+    },
+    "panel_card_color": {
+      "label": "Panel card background color"
+    },
+    "panel_card_opacity": {
+      "label": "Panel card background opacity"
+    },
+    "show_check_notification": {
+      "description": "Show a notification when a check starts and finishes",
+      "label": "Show check notifications"
+    },
+    "show_update_notification": {
+      "description": "Show a notification when updates are found",
+      "label": "Show update notifications"
+    },
+    "update_check_interval": {
+      "description": "How often to check for updates (minutes). Default: 60.",
+      "label": "Check interval (minutes)"
+    },
+    "update_check_timeout": {
+      "description": "Abort the check if it takes longer than this many minutes",
+      "label": "Check timeout (minutes)"
+    },
+    "widget": {
+      "checking_color": {
+        "label": "Checking color"
+      },
+      "checking_glyph": {
+        "label": "Checking glyph"
+      },
+      "colorize_glyph": {
+        "label": "Colorize glyph"
+      },
+      "colorize_text": {
+        "label": "Colorize text"
+      },
+      "show_glyph": {
+        "label": "Show glyph"
+      },
+      "show_text": {
+        "label": "Show text"
+      },
+      "unknown_color": {
+        "label": "Unknown status color"
+      },
+      "unknown_glyph": {
+        "label": "Unknown status glyph"
+      },
+      "up_to_date_color": {
+        "label": "Up to date color"
+      },
+      "up_to_date_glyph": {
+        "label": "Up to date glyph"
+      },
+      "update_available_color": {
+        "label": "Update available color"
+      },
+      "update_available_glyph": {
+        "label": "Update available glyph"
+      }
+    }
+  }
+}
