@@ -6,7 +6,7 @@ icon            = "nix"
 author          = "mdusome"
 description     = "Read-only update checker for flake-based NixOS configurations. Detects updates across all flake inputs without modifying flake.lock."
 tags            = [ "nixos", "nix", "flakes", "utility" ]
-dependencies    = [ "git", "python3" ]
+dependencies    = [ "git", "python3", "nix" ]
 license         = "MIT"
 
 [[widget]]
@@ -105,7 +105,7 @@ key             = "update_check_timeout"
 type            = "int"
 label_key       = "setting.update_check_timeout.label"
 description_key = "setting.update_check_timeout.description"
-default         = 5
+default         = 10
 min             = 1
 max             = 30
 
@@ -136,3 +136,16 @@ type            = "bool"
 label_key       = "setting.show_update_notification.label"
 description_key = "setting.show_update_notification.description"
 default         = true
+
+[[panel]]
+id              = "panel"
+entry           = "panel.luau"
+placement       = "attached"
+position        = "auto"
+open_near_click = true
+width           = 480
+height          = 520
+
+[[service]]
+id      = "service"
+entry   = "service.luau"

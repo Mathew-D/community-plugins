@@ -136,6 +136,20 @@ plugin_api = 3
 tags = ["gaming", "launcher"]
 
 [[plugin]]
+id = "mdusome/nix-flake-update"
+name = "Nix Flake Update"
+version = "1.0.0"
+updated_at = 1756051200
+added_at = 1756051200
+author = "mdusome"
+license = "MIT"
+icon = "nix"
+description = "Read-only update checker for flake-based NixOS configurations. Detects updates across all flake inputs without modifying flake.lock."
+deprecated = false
+plugin_api = 3
+tags = ["nixos", "nix", "flakes", "utility"]
+
+[[plugin]]
 id = "avivbintangaringga/nix-monitor"
 name = "Nix Monitor"
 version = "1.3.1"

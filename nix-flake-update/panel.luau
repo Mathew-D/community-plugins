@@ -22,6 +22,12 @@ local function watchState(key, cb)
 	noctalia.state.watch(key, cb)
 end
 
+-- Forward declaration so inputRow closures can call render()
+local render
+
+-- Tracks which input rows are expanded to show changed files
+local expandedInputs = {}
+
 -- ---------------------------------------------------------------------------
 -- UI helpers
 -- ---------------------------------------------------------------------------
@@ -118,16 +124,18 @@ local function columnHeader()
 	})
 end
 
--- One row per flake input
+-- One row per flake input (returns a column so it can expand to show files/filter)
 local function inputRow(inp)
-	local name        = inp.name         or "?"
-	local lockedRev   = inp.locked_rev   or ""
-	local newRev      = inp.new_rev      or ""
-	local status      = inp.status       or "unknown"
-	local commitCount = inp.commit_count -- number or nil
+	local name           = inp.name           or "?"
+	local lockedRev      = inp.locked_rev     or ""
+	local newRev         = inp.new_rev        or ""
+	local status         = inp.status         or "unknown"
+	local commitCount    = inp.commit_count
+	local changedFiles   = inp.changed_files  or {}
+	local filesTruncated = inp.files_truncated or false
 
-	local statusColor = STATUS_COLOR[status]  or "on_surface_variant"
-	local statusLabel = STATUS_LABEL[status]  or status
+	local statusColor = STATUS_COLOR[status] or "on_surface_variant"
+	local statusLabel = STATUS_LABEL[status] or status
 
 	-- Left dot indicator
 	local dotGlyph = STATUS_DOT[status]
@@ -148,21 +156,24 @@ local function inputRow(inp)
 		revText = "—"
 	end
 
-	-- Commit count (only meaningful for GitHub inputs with a known count)
+	-- Commit count
 	local countEl
 	if status == "update" and type(commitCount) == "number" and commitCount > 0 then
 		countEl = ui.label({
-			text      = "+" .. tostring(commitCount),
-			fontSize  = 11,
+			text       = "+" .. tostring(commitCount),
+			fontSize   = 11,
 			fontWeight = "semibold",
-			color     = "#ffaa33",
-			minWidth  = 52,
+			color      = "#ffaa33",
+			minWidth   = 52,
 		})
 	else
 		countEl = ui.label({ text = "", fontSize = 11, minWidth = 52 })
 	end
 
-	return ui.row({
+	local hasFiles   = type(changedFiles) == "table" and #changedFiles > 0
+	local isExpanded = hasFiles and (expandedInputs[name] == true)
+
+	local mainRow = ui.row({
 		fill     = cardBg(),
 		radius   = 6,
 		paddingV = 6,
@@ -178,7 +189,7 @@ local function inputRow(inp)
 			fontWeight = "semibold",
 			flexGrow   = 1,
 		}),
-		ui.row({ gap = 18, align = "center" }, {
+		ui.row({ gap = 6, align = "center" }, {
 			countEl,
 			ui.label({
 				text     = revText,
@@ -193,8 +204,50 @@ local function inputRow(inp)
 				color      = statusColor,
 				minWidth   = 60,
 			}),
+			hasFiles and ui.button({
+				glyph       = isExpanded and "chevron-up" or "chevron-down",
+				variant     = "ghost",
+				controlSize = "sm",
+				tooltip     = isExpanded and "Hide changed files" or "Show changed files",
+				onClick     = function()
+					expandedInputs[name] = not isExpanded
+					render()
+				end,
+			}) or ui.label({ text = " ", minWidth = 28 }),
 		}),
 	})
+
+	local subPanels = { mainRow }
+
+	-- Expanded file list
+	if isExpanded then
+		local fileItems = {}
+		for _, fname in ipairs(changedFiles) do
+			table.insert(fileItems, ui.row({ gap = 6, align = "center" }, {
+				ui.label({ text = "·", fontSize = 10, color = "on_surface_variant", minWidth = 10 }),
+				ui.label({ text = fname, fontSize = 11, color = "on_surface_variant", maxLines = 1, flexGrow = 1 }),
+			}))
+		end
+		if filesTruncated then
+			table.insert(fileItems, ui.label({
+				text     = "… showing first 50 changed files",
+				fontSize = 10,
+				color    = "on_surface_variant",
+			}))
+		end
+		table.insert(subPanels, ui.column({
+			fill     = cardBg(),
+			radius   = 6,
+			paddingV = 6,
+			paddingH = 18,
+			gap      = 3,
+		}, fileItems))
+	end
+
+	if #subPanels == 1 then
+		return subPanels[1]
+	end
+	return ui.column({ gap = 2 }, subPanels)
 end
 
 -- Summary card with a glyph appropriate to the current state
@@ -244,7 +297,7 @@ end
 -- Render
 -- ---------------------------------------------------------------------------
 
-local function render()
+render = function()
 	local isChecking   = getState("isChecking")
 	local flakeFound   = getState("flakeFound")
 	local flakePath    = getState("flakePath") or ""
@@ -263,7 +316,27 @@ local function render()
 		inputs = decoded
 	end
 
-	-- ---- Header ----
+	-- ---- Input list (scrollable) ----
+	local sorted = sortInputs(inputs)
+	local listRows = {}
+
+	if #sorted > 0 then
+		table.insert(listRows, columnHeader())
+		for _, inp in ipairs(sorted) do
+			table.insert(listRows, inputRow(inp))
+		end
+	elseif isChecking then
+		table.insert(listRows, ui.row({
+			align    = "center",
+			justify  = "center",
+			paddingV = 12,
+		}, {
+			ui.glyph({ name = "loader-3", size = 20, color = "#ffeb57" }),
+			ui.label({ text = "  " .. tr("panel.checking"), fontSize = 12, color = "on_surface_variant" }),
+		}))
+	end
+
+	-- ---- Assemble ----
 	local children = {
 		ui.row({
 			align   = "center",
@@ -279,59 +352,37 @@ local function render()
 			}),
 		}),
 		ui.separator({ thickness = 2, orientation = "horizontal", spacing = 4 }),
-
-		-- Summary card
 		summaryCard(isChecking, anyUpdates, totalUpdates, errMsg, flakeFound, #inputs),
 		ui.separator({ thickness = 1, orientation = "horizontal", spacing = 2 }),
+		-- Scrollable input list fills all remaining vertical space
+		ui.scroll({ flexGrow = 1, gap = 4 }, listRows),
+		ui.separator({ thickness = 1, orientation = "horizontal", spacing = 2 }),
+		ui.row({
+			align   = "center",
+			justify = "space_between",
+		}, {
+			ui.label({
+				text     = tr("panel.last_checked") .. ": " .. lastChecked,
+				fontSize = 11,
+				color    = "on_surface_variant",
+			}),
+			isChecking
+				and ui.button({
+					text    = tr("panel.cancel"),
+					glyph   = "cancel",
+					variant = "destructive",
+					onClick = "onCancelClicked",
+				})
+				or ui.button({
+					text    = tr("panel.check"),
+					glyph   = "search",
+					variant = "outline",
+					onClick = "onCheckClicked",
+				}),
+		}),
 	}
 
-	-- ---- Input rows (with header if we have data) ----
-	local sorted = sortInputs(inputs)
-
-	if #sorted > 0 then
-		table.insert(children, columnHeader())
-		for _, inp in ipairs(sorted) do
-			table.insert(children, inputRow(inp))
-		end
-	elseif isChecking then
-		-- First-ever check in progress — show a spinner-style label
-		table.insert(children, ui.row({
-			align   = "center",
-			justify = "center",
-			paddingV = 12,
-		}, {
-			ui.glyph({ name = "loader-3", size = 20, color = "#ffeb57" }),
-			ui.label({ text = "  " .. tr("panel.checking"), fontSize = 12, color = "on_surface_variant" }),
-		}))
-	end
-
-	-- ---- Footer ----
-	table.insert(children, ui.separator({ thickness = 1, orientation = "horizontal", spacing = 2 }))
-	table.insert(children, ui.row({
-		align   = "center",
-		justify = "space_between",
-	}, {
-		ui.label({
-			text     = tr("panel.last_checked") .. ": " .. lastChecked,
-			fontSize = 11,
-			color    = "on_surface_variant",
-		}),
-		isChecking
-			and ui.button({
-				text    = tr("panel.cancel"),
-				glyph   = "cancel",
-				variant = "destructive",
-				onClick = "onCancelClicked",
-			})
-			or ui.button({
-				text    = tr("panel.check"),
-				glyph   = "search",
-				variant = "outline",
-				onClick = "onCheckClicked",
-			}),
-	}))
-
-	panel.render(ui.column({ gap = 6 }, children))
+	panel.render(ui.column({ flexGrow = 1, gap = 6, padding = 12 }, children))
 end
 
 -- ---------------------------------------------------------------------------

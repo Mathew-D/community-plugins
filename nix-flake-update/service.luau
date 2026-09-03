@@ -6,13 +6,12 @@
 -- Strategy:
 --   1. Detect the user's flake directory (user setting → common path scan).
 --   2. Write a Python 3 helper script to the plugin data dir once.
---   3. Periodically spawn the helper as a background process; it reads
---      flake.lock (pure JSON, no nix invocation needed), then runs
---      `git ls-remote` for every git-backed input in parallel and writes
---      a JSON result file.
+--   3. Periodically spawn the helper as a background process; it copies
+--      flake.nix + flake.lock into a temp dir, runs `nix flake update`,
+--      diffs the lock files, and writes JSON result data.
 --   4. Poll the result file in the 1-second update() tick; parse it and
 --      update shared state consumed by the widget and panel.
---   5. Never run nix flake update / nixos-rebuild / home-manager switch.
+--   5. Never modify the real flake.lock or trigger a rebuild.
 
 noctalia.setUpdateInterval(1000)
 
@@ -55,164 +54,50 @@ end
 -- Paths
 -- ---------------------------------------------------------------------------
 
-local stateDir    = noctalia.pluginDataDir() or "/tmp/nix-flake-update"
-local resultFile  = stateDir .. "/result.json"
-local pidFile     = stateDir .. "/check.pid"
-local scriptFile  = stateDir .. "/check_flake.py"
+local stateDir   = noctalia.pluginDataDir() or "/tmp/nix-flake-update"
+local resultFile = stateDir .. "/result.json"
+local pidFile    = stateDir .. "/check.pid"
+local scriptFile = stateDir .. "/check_flake.py"
 
 -- ---------------------------------------------------------------------------
 -- The Python 3 check script (written once at startup)
--- Uses only stdlib: json, subprocess, os, sys, concurrent.futures
--- No nix invocations; reads flake.lock directly, queries remotes via git.
+-- Uses only stdlib: json, os, shutil, subprocess, sys, tempfile
+-- It runs `nix flake update` in a temp copy so the real flake.lock stays untouched.
 -- ---------------------------------------------------------------------------
 
 local PYTHON_SCRIPT = [==[
 #!/usr/bin/env python3
 """
-Read flake.lock and check whether any flake input has a newer revision
-available on its remote. Outputs a single JSON object to stdout.
+Check for flake input updates by running `nix flake update` on a temporary
+copy of flake.nix + flake.lock, then diffing the two lock files.
 
-Never modifies flake.lock or runs nix flake update.
+The real flake.lock is never modified.
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
-GIT_TIMEOUT  = 30   # seconds per git ls-remote call
-HTTP_TIMEOUT = 10   # seconds for GitHub compare API call
-MAX_WORKERS  = 8    # parallel git ls-remote calls
+import tempfile
 
 
-def _github_commit_count(owner, repo, base, head):
-    """
-    Return the number of commits `head` is ahead of `base` on GitHub,
-    using the public compare API (no auth required for public repos).
-    Returns None on any failure.
-    """
-    import urllib.request
-    import urllib.error
-
-    url = "https://api.github.com/repos/{}/{}/compare/{}...{}".format(
-        owner, repo, base, head
-    )
-    req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json",
-                                               "User-Agent": "nix-flake-update-plugin"})
-    try:
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
-            data = json.loads(resp.read().decode())
-            return data.get("ahead_by")
-    except Exception:
-        return None
-
-
-def _git_ls_remote(url, ref):
-    """Return the full SHA at the tip of `ref` on `url`, or None on failure."""
-    # Try the exact ref, then refs/heads/<ref>, then refs/tags/<ref>
-    candidates = [ref]
-    if ref and not ref.startswith("refs/"):
-        candidates += ["refs/heads/" + ref, "refs/tags/" + ref]
-
-    for candidate in candidates:
-        try:
-            proc = subprocess.run(
-                ["git", "ls-remote", "--exit-code", url, candidate],
-                capture_output=True,
-                text=True,
-                timeout=GIT_TIMEOUT,
-            )
-            if proc.returncode == 0 and proc.stdout.strip():
-                lines = [
-                    l for l in proc.stdout.strip().splitlines()
-                    if "\t" in l
-                ]
-                if lines:
-                    return lines[0].split("\t")[0].strip()
-        except subprocess.TimeoutExpired:
-            return None
-        except Exception:
-            pass
-    return None
-
-
-def _check_input(input_name, node):
-    """Return a dict describing the update status of one flake input."""
-    locked   = node.get("locked", {})
-    original = node.get("original", {})
-
-    input_type  = locked.get("type") or original.get("type", "")
-    locked_rev  = locked.get("rev", "")
-
-    # ---- Inputs we cannot (or need not) check remotely -------------------
-    if input_type == "path":
-        return dict(name=input_name, locked_rev="", new_rev="",
-                    status="local", type=input_type)
-    if input_type == "tarball":
-        return dict(name=input_name, locked_rev=locked_rev[:7] if locked_rev else "",
-                    new_rev="", status="tarball", type=input_type)
-    if input_type == "indirect":
-        return dict(name=input_name, locked_rev=locked_rev[:7] if locked_rev else "",
-                    new_rev="", status="indirect", type=input_type)
-
-    # ---- Build remote URL and ref ----------------------------------------
-    ref = original.get("ref") or locked.get("ref") or "HEAD"
-
-    owner = None
-    repo  = None
-
-    if input_type == "github":
-        owner = original.get("owner") or locked.get("owner", "")
-        repo  = original.get("repo")  or locked.get("repo",  "")
-        url   = "https://github.com/{}/{}".format(owner, repo)
-    elif input_type == "gitlab":
-        owner = original.get("owner") or locked.get("owner", "")
-        repo  = original.get("repo")  or locked.get("repo",  "")
-        host  = original.get("host")  or locked.get("host",  "gitlab.com")
-        url   = "https://{}/{}/{}".format(host, owner, repo)
-    elif input_type == "sourcehut":
-        owner = original.get("owner") or locked.get("owner", "")
-        repo  = original.get("repo")  or locked.get("repo",  "")
-        url   = "https://git.sr.ht/{}/{}".format(owner, repo)
-    elif input_type == "git":
-        url = original.get("url") or locked.get("url", "")
-    else:
-        return dict(name=input_name, locked_rev=locked_rev[:7] if locked_rev else "",
-                    new_rev="", commit_count=None, status="unsupported", type=input_type)
-
-    if not url:
-        return dict(name=input_name, locked_rev=locked_rev[:7] if locked_rev else "",
-                    new_rev="", commit_count=None, status="error", type=input_type)
-
-    # ---- Query remote -------------------------------------------------------
-    new_rev = _git_ls_remote(url, ref)
-
-    if new_rev is None:
-        status       = "error"
-        new_rev      = ""
-        commit_count = None
-    elif locked_rev and new_rev:
-        if locked_rev == new_rev:
-            status       = "up_to_date"
-            commit_count = 0
+def _parse_inputs(lock):
+    """Return {input_name: node} for all root-level inputs."""
+    nodes    = lock.get("nodes", {})
+    root_key = lock.get("root", "root")
+    root_inputs = nodes.get(root_key, {}).get("inputs", {})
+    result = {}
+    for name, ref in root_inputs.items():
+        if isinstance(ref, str):
+            key = ref
+        elif isinstance(ref, list):
+            key = ref[-1] if ref else name
         else:
-            status = "update"
-            # For GitHub inputs query the compare API to get the ahead-by count.
-            commit_count = None
-            if input_type == "github" and owner and repo and locked_rev and new_rev:
-                commit_count = _github_commit_count(owner, repo, locked_rev, new_rev)
-    else:
-        status       = "unknown"
-        commit_count = None
-
-    return dict(
-        name=input_name,
-        locked_rev=locked_rev[:7] if locked_rev else "",
-        new_rev=new_rev[:7]       if new_rev    else "",
-        commit_count=commit_count,
-        status=status,
-        type=input_type,
-    )
+            key = name
+        node = nodes.get(key)
+        if node:
+            result[name] = node
+    return result
 
 
 def main():
@@ -222,61 +107,81 @@ def main():
 
     flake_path = sys.argv[1]
     lock_path  = os.path.join(flake_path, "flake.lock")
+    flake_nix  = os.path.join(flake_path, "flake.nix")
 
-    if not os.path.isfile(lock_path):
-        print(json.dumps({
-            "error": "flake.lock not found at " + lock_path,
-            "inputs": [],
-            "total_updates": 0,
-        }))
-        sys.exit(1)
+    for path in (lock_path, flake_nix):
+        if not os.path.isfile(path):
+            print(json.dumps({"error": path + " not found", "inputs": [], "total_updates": 0}))
+            sys.exit(1)
 
     try:
         with open(lock_path) as fh:
-            lock = json.load(fh)
+            old_lock = json.load(fh)
     except Exception as exc:
-        print(json.dumps({
-            "error": "Cannot parse flake.lock: " + str(exc),
-            "inputs": [],
-            "total_updates": 0,
-        }))
+        print(json.dumps({"error": "Cannot parse flake.lock: " + str(exc), "inputs": [], "total_updates": 0}))
         sys.exit(1)
 
-    nodes    = lock.get("nodes", {})
-    root_key = lock.get("root", "root")
-    root_inputs = nodes.get(root_key, {}).get("inputs", {})
+    tmpdir = tempfile.mkdtemp(prefix="nix-flake-update-check-")
+    try:
+        shutil.copy2(flake_nix,  os.path.join(tmpdir, "flake.nix"))
+        shutil.copy2(lock_path,  os.path.join(tmpdir, "flake.lock"))
 
-    # Resolve node references (may be a string alias, or a path-list)
-    work = {}
-    for input_name, node_ref in root_inputs.items():
-        if isinstance(node_ref, str):
-            actual = node_ref
-        elif isinstance(node_ref, list):
-            actual = node_ref[-1] if node_ref else input_name
-        else:
-            actual = input_name
-        node = nodes.get(actual, {})
-        if node:
-            work[input_name] = node
+        proc = subprocess.run(
+            ["nix", "flake", "update"],
+            cwd=tmpdir,
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+
+        if proc.returncode != 0:
+            err = (proc.stderr or proc.stdout or "unknown error").strip()
+            # Truncate to avoid huge JSON
+            print(json.dumps({"error": "nix flake update failed: " + err[:400],
+                              "inputs": [], "total_updates": 0}))
+            return
+
+        with open(os.path.join(tmpdir, "flake.lock")) as fh:
+            new_lock = json.load(fh)
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    old_inputs = _parse_inputs(old_lock)
+    new_inputs = _parse_inputs(new_lock)
 
     results = []
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        future_map = {pool.submit(_check_input, name, node): name
-                      for name, node in work.items()}
-        for future in as_completed(future_map, timeout=120):
-            try:
-                results.append(future.result())
-            except Exception:
-                name = future_map[future]
-                results.append(dict(name=name, locked_rev="", new_rev="",
-                                    status="error", type="unknown"))
+    for name, old_node in old_inputs.items():
+        old_locked   = old_node.get("locked", {})
+        new_node     = new_inputs.get(name, {})
+        new_locked   = new_node.get("locked", {})
+        input_type   = old_locked.get("type") or old_node.get("original", {}).get("type", "")
+        old_rev      = old_locked.get("rev", "")
+        new_rev      = new_locked.get("rev", "")
+
+        if input_type == "path":
+            status = "local"
+        elif not old_rev and not new_rev:
+            status = "unknown"
+        elif old_rev == new_rev:
+            status = "up_to_date"
+        else:
+            status = "update"
+
+        results.append({
+            "name":       name,
+            "locked_rev": old_rev[:7] if old_rev else "",
+            "new_rev":    new_rev[:7] if new_rev else "",
+            "status":     status,
+            "type":       input_type,
+        })
 
     results.sort(key=lambda x: x["name"])
-    total_updates = sum(1 for r in results if r.get("status") == "update")
+    total_updates = sum(1 for r in results if r["status"] == "update")
 
     print(json.dumps({
-        "error": None,
-        "inputs": results,
+        "error":         None,
+        "inputs":        results,
         "total_updates": total_updates,
     }))
 
@@ -391,7 +296,7 @@ local function pollCheckResult()
 	end
 
 	-- Timeout guard
-	local timeout = cfg("update_check_timeout") or 5
+	local timeout = cfg("update_check_timeout") or 10
 	if (os.time() - (getState("checkStartTime") or 0)) > 60 * timeout then
 		cancelCheck()
 		setState("error", tr("error.check_timed_out"))

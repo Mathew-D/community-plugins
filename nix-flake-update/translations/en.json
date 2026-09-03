@@ -52,7 +52,7 @@
       "label": "Check interval (minutes)"
     },
     "update_check_timeout": {
-      "description": "Abort the check if it takes longer than this many minutes",
+      "description": "Abort the check if it takes longer than this many minutes. Default: 10.",
       "label": "Check timeout (minutes)"
     },
     "widget": {
